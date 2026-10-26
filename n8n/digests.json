@@ -1,0 +1,429 @@
+{
+  "name": "Fitness digests (morning brief, night check-in)",
+  "description": "Scheduled coach messages: 10:00 morning brief written by Claude from coach_context(digest_morning); 22:00 deterministic night check-in with inline buttons (taps handled by the Fitness bot workflow).",
+  "nodes": [
+    {
+      "id": "0705da32-fac5-4ce5-ae99-74d5166ac258",
+      "name": "Every day 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 10,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "170b7392-8a5a-4dca-aced-151ccde0a541",
+      "name": "Morning context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/rpc/coach_context",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"kind\":\"digest_morning\"}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "4bef4770-ed6f-405b-bc01-68b70391c7ff",
+      "name": "Build morning request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Build morning request\n// Input: Morning context (coach_context('digest_morning')). Output: { body } for the Anthropic Messages API.\nconst ctx = $input.first().json || {};\nif (!ctx.charter) return [{ json: { skip: true } }];\nconst { charter, ...facts } = ctx;\nconst now = DateTime.now().setZone('Europe/London');\n\nconst rules = `## How you are being used right now\nThis is the 10:00 morning digest in the user's Telegram fitness bot, sent automatically every day. He weighs first thing (today_so_far.weight_kg if it landed) and does not normally eat before 11:00. Write today's brief.\n\nBlocks, in this order, one short block each. Skip a block only if there is nothing to say.\n1. ⚖️ Weight: today's reading if logged, the 7-day average and direction vs last week (weight_trend), against the phase target in programme. Creatine water context while it applies (while a supplement change applies). No reading yet: one line saying so, ask for it.\n2. 📈 Trend call: is the 7-day trend on plan for the phase? One line. Propose an adjustment only if the trend has been off for a week, per the charter.\n3. 🔁 Yesterday: intake vs yesterday_plan.kcal_target, protein vs floor, training done or not (yesterday_sessions / yesterday.cardio_type), quiz answers if present (yesterday.energy, mood, soreness, hunger, substances, note), stool if present (yesterday_stool.types; comment only on a 1-2 or 6-7 with an obvious cause in yesterday_stool.prev_day_items, per the charter's Gut section). Facts, calmly. If today_plan.correction > 0, say today's budget is X lower to absorb yesterday's overshoot (the cap is already applied in code); plan, not punishment.\n4. 🎯 Today: day type (today_plan.day_type) and how it was decided (source: logged, set by the user, or proposed with today_plan.reason), then the budget: kcal_target, protein_floor_g, carb_g, fat_g, fibre_floor_g. If proposed, one line: change it with \"pull today\", \"rest day\" etc.\n5. 🍽️ Protein plan: four feeds of roughly 35-45g across the eating window (first meal about 11:00). On lifting days training is in programme.training_time, so say where the pre- or post-training feed lands and which meal carries the most. Rest and cardio days: spread evenly, dinner carries the meat.\n6. 🏋️ Training: lifting day: which day, the template exercises for it (programme_days) in one line, focus lift named; a stalled lift from stalled gets the charter's one suggested change. Cardio day: which session (4x4 bike intervals or zone 2 swim/ride) given weekly_training this week. Rest: say rest.\n7. ⚠️ Due: tape (last_tape; weekly waist/neck/hips, 4-weekly full set), creatine daily, open_pending items. Only what is actually due.\n\nRules:\n- Layout per the charter's Tone and format section: one point per line, blank line between blocks, emoji marker at the start of each block's first line. Plain text, no markdown, no headings.\n- Under 220 words. Numbers only from the facts. Never invent or estimate.\n- British English, hyphens never em dashes.\n- The digest is planning and adjustment; it is the one place an overshoot is addressed, and it is addressed calmly, once.`;\n\nconst user = `Morning digest for ${now.toFormat('cccc d MMMM yyyy')}, ${now.toFormat('HH:mm')} Europe/London.\n\nFacts:\n${JSON.stringify(facts)}`;\n\nconst body = {\n  model: 'claude-sonnet-5-5',\n  max_tokens: 4000,\n  thinking: { type: 'adaptive' },\n  output_config: { effort: 'medium' },\n  system: [\n    { type: 'text', text: charter, cache_control: { type: 'ephemeral' } },\n    { type: 'text', text: rules },\n  ],\n  messages: [{ role: 'user', content: user }],\n};\nreturn [{ json: { body } }];\n"
+      }
+    },
+    {
+      "id": "2d549a44-1c5b-4fa7-8ec7-d879b36b1783",
+      "name": "Claude morning",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "{{CRED_ANTHROPIC_ID}}",
+          "name": "Anthropic (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "fa8e6526-501c-47f5-9955-650977b1ceb0",
+      "name": "Morning text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Morning text\nconst j = $input.first().json || {};\nif (j.skip) return [];\nconst text = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\\n').trim();\nif (!text || j.error) return [{ json: { text: '⚠️ Morning digest failed to generate. Check Executions on n8n.' } }];\nreturn [{ json: { text } }];\n"
+      }
+    },
+    {
+      "id": "a990ac32-e156-4bb2-a365-2829bb2d5a76",
+      "name": "Send morning digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "chatId": "{{TELEGRAM_CHAT_ID}}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "{{WEBHOOK_ID}}",
+      "credentials": {
+        "telegramApi": {
+          "id": "{{CRED_TELEGRAM_ID}}",
+          "name": "Telegram bot (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "39235dd1-0498-4a41-93e4-929374f86923",
+      "name": "Every day 22:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 22,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dfce5a0e-119b-42c0-9e34-6d7628cd3341",
+      "name": "Night context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/rpc/coach_context",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"kind\":\"digest_night\"}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "aaafb533-c890-4794-aa9c-23a083b423c4",
+      "name": "Build night quiz",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Build night quiz\n// Input: Night context (coach_context('digest_night')). Deterministic: no model. Output: { text, keyboard, date }.\n// Shared quiz renderer (duplicated in the night digest workflow and the bot's Quiz step node; keep in sync)\nconst QUIZ = {\n  2: { key: 'energy',   q: '⚡ Energy today?\\n1 flat, 3 normal, 5 full of beans', scale: true },\n  3: { key: 'mood',     q: '🙂 Mood?\\n1 low, 3 fine, 5 great', scale: true },\n  4: { key: 'soreness', q: '💢 Soreness?\\n1 none, 3 noticeable, 5 wrecked', scale: true },\n  5: { key: 'hunger',   q: '🍽️ Hunger?\\n1 not hungry, 3 normal, 5 ravenous', scale: true },\n  6: { key: 'substances', q: '🍃 Anything today?', opts: [['None','none'],['Alcohol','alcohol'],['THC','thc'],['Both','both']] },\n  7: { key: 'bowel_count', q: '🚽 Bowel movements today?', count: true },\n  8: { key: 'stool',    q: '💩 Quality? Bristol scale\\n1-2 hard, 3-4 ideal, 5 soft, 6-7 loose', stool: true },\n  9: { key: 'note',     q: '📝 Anything to note?\\nType \"note: ...\" or tap Skip', opts: [['⏭️ Skip','skip']] },\n};\nconst LAST = 10;   // step 10 = done\nconst btn = (text, data) => ({ text, additionalFields: { callback_data: data } });\nconst kb = (rows) => ({ rows: rows.map(r => ({ row: { buttons: r } })) });\nconst answeredLine = (row) => {\n  const parts = [];\n  if (row.energy) parts.push(`⚡${row.energy}`);\n  if (row.mood) parts.push(`🙂${row.mood}`);\n  if (row.soreness) parts.push(`💢${row.soreness}`);\n  if (row.hunger) parts.push(`🍽️${row.hunger}`);\n  if (row.substances) parts.push(`🍃 ${row.substances}`);\n  if (row.bowel_count != null) parts.push(`🚽${row.bowel_count === 4 ? '4+' : row.bowel_count}`);\n  if (row.stool_quiz) parts.push(`💩${row.stool_quiz}`);\n  return parts.join('  ');\n};\n// Returns { text, keyboard, layout } for a step given the daily row (answers so far) and the step-1 summary text\nfunction renderStep(step, row, summary, variant) {\n  if (step === 1) {\n    if (variant === 'change') {\n      return { text: `${summary}\\n\\n✏️ Send the fix as a normal message (food, weight, workout), then tap Continue.`, keyboard: kb([[btn('▶️ Continue', 'q:1:ok')]]), layout: 'continue' };\n    }\n    return { text: `${summary}\\n\\nIs this all correct?`, keyboard: kb([[btn('✅ Correct', 'q:1:ok'), btn('✏️ Change something', 'q:1:change')]]), layout: 'confirm' };\n  }\n  if (step >= 2 && step < LAST) {\n    const s = QUIZ[step];\n    const head = answeredLine(row);\n    const text = (head ? head + '\\n\\n' : '') + s.q;\n    let buttons, layout;\n    if (s.scale) { buttons = [[1,2,3,4,5].map(n => btn(String(n), `q:${step}:${n}`))]; layout = 'scale'; }\n    else if (s.count) { buttons = [[0,1,2,3].map(n => btn(String(n), `q:${step}:${n}`)).concat([btn('4+', `q:${step}:4`)])]; layout = 'count'; }\n    else if (s.stool) { buttons = [[1,2,3,4].map(n => btn(String(n), `q:${step}:${n}`)), [5,6,7].map(n => btn(String(n), `q:${step}:${n}`)).concat([btn('⏭️ Skip', `q:${step}:skip`)])]; layout = 'stool'; }\n    else { buttons = [s.opts.map(([t, v]) => btn(t, `q:${step}:${v}`))]; layout = step === 6 ? 'subs' : 'skip'; }\n    return { text, keyboard: kb(buttons), layout };\n  }\n  // step LAST: done\n  const head = answeredLine(row);\n  const noteLine = row.note ? `\\n📝 ${row.note}` : '';\n  return { text: `${head}${noteLine}\\n\\n✅ All recorded. Night.`, keyboard: null, layout: 'final' };\n}\n\n\nconst ctx = $input.first().json || {};\nconst t = ctx.today || {};\nconst log = ctx.today_log || [];\nconst sess = ctx.today_sessions || [];\nconst plan = ctx.today_plan || {};\nconst d = DateTime.now().setZone('Europe/London');\nconst lines = [`🌙 ${d.toFormat('ccc d MMM')}`];\nlines.push(t.weight_kg ? `⚖️ ${Number(t.weight_kg).toFixed(1)}kg` : '⚖️ No weigh-in logged');\nif (log.length || t.calories) {\n  lines.push(`🍽️ ${Math.round(t.calories || 0)} kcal, ${Math.round(t.protein_g || 0)}g protein, ${log.length} item${log.length === 1 ? '' : 's'} (target ${plan.kcal_target} / ${plan.protein_floor_g})`);\n} else {\n  lines.push('🍽️ No food logged');\n}\nif (sess.length) lines.push(`🏋️ ${sess.map(s => `${s.type} session, ${s.sets} sets`).join('; ')}`);\nelse if (t.cardio_type) lines.push(`🚴 ${t.cardio_type}${t.cardio_mins ? ', ' + t.cardio_mins + ' min' : ''}`);\nelse lines.push(`🏋️ No training logged (${plan.day_type} day)`);\nif (ctx.today_stool && ctx.today_stool.length) lines.push(`💩 ${ctx.today_stool.map(t => 'type ' + t).join(', ')}`);\nif (ctx.open_pending && ctx.open_pending.length) lines.push(`❓ Still unresolved: ${ctx.open_pending.map(p => p.item).join(', ')}`);\nconst summary = lines.join('\\n');\nconst r = renderStep(1, t, summary);\nreturn [{ json: { text: r.text, keyboard: r.keyboard, date: d.toISODate() } }];\n"
+      }
+    },
+    {
+      "id": "56fdb17f-fde3-4e84-8404-9a97ab7401e1",
+      "name": "Send night quiz",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "chatId": "{{TELEGRAM_CHAT_ID}}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "additionalFields": {
+                      "callback_data": "q:1:ok"
+                    },
+                    "text": "✅ Correct"
+                  },
+                  {
+                    "additionalFields": {
+                      "callback_data": "q:1:change"
+                    },
+                    "text": "✏️ Change something"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "{{WEBHOOK_ID}}",
+      "credentials": {
+        "telegramApi": {
+          "id": "{{CRED_TELEGRAM_ID}}",
+          "name": "Telegram bot (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "78fcfb48-88ba-45b6-86a7-cc9ca2d78f22",
+      "name": "Save quiz state",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/daily",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "on_conflict",
+              "value": "date"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ date: $('Build night quiz').first().json.date, quiz_step: 1, quiz_msg_id: $json.result.message_id, day_status: 'open' }]) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every day 10:00": {
+      "main": [
+        [
+          {
+            "node": "Morning context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Morning context": {
+      "main": [
+        [
+          {
+            "node": "Build morning request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build morning request": {
+      "main": [
+        [
+          {
+            "node": "Claude morning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude morning": {
+      "main": [
+        [
+          {
+            "node": "Morning text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Morning text": {
+      "main": [
+        [
+          {
+            "node": "Send morning digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every day 22:00": {
+      "main": [
+        [
+          {
+            "node": "Night context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Night context": {
+      "main": [
+        [
+          {
+            "node": "Build night quiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build night quiz": {
+      "main": [
+        [
+          {
+            "node": "Send night quiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send night quiz": {
+      "main": [
+        [
+          {
+            "node": "Save quiz state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/London"
+  },
+  "nodeGroups": [
+    {
+      "id": "1a5a23de-0e94-4792-8fcb-c4818d215d23",
+      "name": "Morning digest",
+      "nodeNames": [
+        "Morning context",
+        "Build morning request",
+        "Claude morning",
+        "Morning text",
+        "Send morning digest"
+      ],
+      "description": "10:00: weight and trend first, yesterday recap, day type and budget, protein plan, training, anything due. Claude writes it from coach_context(di"
+    },
+    {
+      "id": "398db7f7-1ed3-4f68-9acf-e81aee514ab0",
+      "name": "Night check-in",
+      "nodeNames": [
+        "Night context",
+        "Build night quiz",
+        "Send night quiz",
+        "Save quiz state"
+      ],
+      "description": "22:00: deterministic record of the day with inline buttons; the bot workflow handles the taps."
+    }
+  ]
+}

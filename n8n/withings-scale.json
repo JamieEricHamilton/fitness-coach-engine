@@ -1,0 +1,1254 @@
+{
+  "name": "Fitness: Withings scale",
+  "nodes": [
+    {
+      "id": "acdad049-d70f-4e04-a60e-838e75e7185c",
+      "name": "Withings OAuth callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "withings/callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "{{WEBHOOK_ID}}"
+    },
+    {
+      "id": "8c881e8d-c925-4f52-ae9a-ef10f5862c03",
+      "name": "Read integration",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "url": "{{SUPABASE_URL}}/rest/v1/integrations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "provider",
+              "value": "eq.withings"
+            },
+            {
+              "name": "select",
+              "value": "*"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "8b597fd5-19ba-41d8-bab5-6141502841fc",
+      "name": "Exchange code",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wbsapi.withings.net/v2/oauth2",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "requesttoken"
+            },
+            {
+              "name": "client_id",
+              "value": "={{ $json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $json.client_secret }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "authorization_code"
+            },
+            {
+              "name": "code",
+              "value": "={{ $('Withings OAuth callback').first().json.query.code }}"
+            },
+            {
+              "name": "redirect_uri",
+              "value": "{{N8N_WEBHOOK_BASE_URL}}/webhook/withings/callback"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "31694523-8218-4015-a234-ba34872fc6aa",
+      "name": "Save tokens",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Save tokens\n// Input: Withings requesttoken response (authorization_code grant). Output: the integrations row to upsert, plus access_token.\nconst cfg = $('Read integration').first().json || {};\nconst res = $input.first().json || {};\nconst REDIRECT = '{{N8N_WEBHOOK_BASE_URL}}/webhook/withings/callback';\nconst NOTIFY = '{{N8N_WEBHOOK_BASE_URL}}/webhook/withings/notify';\nif (res.status !== 0 || !res.body || !res.body.access_token) {\n  return [{ json: { ok: false, error: `Withings token exchange failed: status ${res.status} ${res.error || ''}`.trim(), access_token: null } }];\n}\nconst b = res.body;\nconst expiresAt = new Date(Date.now() + (Number(b.expires_in || 10800) - 120) * 1000).toISOString();\nreturn [{ json: {\n  ok: true,\n  provider: 'withings',\n  access_token: b.access_token,\n  refresh_token: b.refresh_token,\n  expires_at: expiresAt,\n  external_user_id: String(b.userid || ''),\n  callback_url: REDIRECT,\n  meta: Object.assign({}, cfg.meta || {}, { notify_url: NOTIFY, scope: b.scope, connected_at: new Date().toISOString() }),\n  updated_at: new Date().toISOString(),\n} }];\n"
+      }
+    },
+    {
+      "id": "ed35384a-c5e6-4af1-bae3-7f24324da8bb",
+      "name": "Upsert integration",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/integrations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "on_conflict",
+              "value": "provider"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.ok ? JSON.stringify([{ provider: $json.provider, access_token: $json.access_token, refresh_token: $json.refresh_token, expires_at: $json.expires_at, external_user_id: $json.external_user_id, callback_url: $json.callback_url, meta: $json.meta, updated_at: $json.updated_at }]) : '[]' }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "f8f4c4de-6b0c-447b-a317-f5c0c530e780",
+      "name": "Subscribe notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wbsapi.withings.net/notify",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Save tokens').first().json.access_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "subscribe"
+            },
+            {
+              "name": "callbackurl",
+              "value": "{{N8N_WEBHOOK_BASE_URL}}/webhook/withings/notify"
+            },
+            {
+              "name": "appli",
+              "value": "1"
+            },
+            {
+              "name": "comment",
+              "value": "coach-engine: weight"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "f816e774-8fbd-4209-98d9-dc20f370dae3",
+      "name": "Connected text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Connected text\nconst t = $('Save tokens').first().json || {};\nconst sub = $input.first().json || {};\nif (!t.ok) return [{ json: { html: `<h2>Withings: not connected</h2><p>${t.error}</p><p>Try the authorise link again (the code only lives 30 seconds).</p>`, tg: `⚠️ Withings connection failed: ${t.error}` } }];\nconst subOk = sub.status === 0;\nconst html = `<h2>Withings connected ✅</h2><p>User ${t.external_user_id}. Notification subscription: ${subOk ? 'active' : 'FAILED (status ' + sub.status + ' ' + (sub.error || '') + ')'}.</p><p>Step on the scale: the reading should arrive in Telegram within a minute or two.</p>`;\nconst tg = subOk ? `⚖️ Withings scale connected. Weigh-ins now land here automatically.` : `⚠️ Withings tokens saved but the notification subscription failed (status ${sub.status} ${sub.error || ''}). Ask Claude to re-run the subscribe step.`;\nreturn [{ json: { html, tg } }];\n"
+      }
+    },
+    {
+      "id": "4a8ba444-13f5-4630-8951-f8d79214002c",
+      "name": "Respond connected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1680,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "ea77bfca-cd35-487d-9db8-036a9f0ff115",
+      "name": "Telegram connected",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1680,
+        100
+      ],
+      "parameters": {
+        "chatId": "{{TELEGRAM_CHAT_ID}}",
+        "text": "={{ $json.tg }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "{{WEBHOOK_ID}}",
+      "credentials": {
+        "telegramApi": {
+          "id": "{{CRED_TELEGRAM_ID}}",
+          "name": "Telegram bot (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "5f0c8ef5-e9b6-49b7-bbeb-fe1f9267052f",
+      "name": "Withings notify (HEAD check)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "HEAD",
+        "path": "withings/notify",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "{{WEBHOOK_ID}}"
+    },
+    {
+      "id": "2f4cbd18-4484-4f56-b624-b01ac489182c",
+      "name": "HEAD ok",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "8a64834c-9daf-4d8e-a907-1c6a0f8b11d3",
+      "name": "Withings notify",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "withings/notify",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "{{WEBHOOK_ID}}"
+    },
+    {
+      "id": "92548ca7-6852-46b5-ade0-fb355f24fafc",
+      "name": "Read integration W",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        500
+      ],
+      "parameters": {
+        "url": "{{SUPABASE_URL}}/rest/v1/integrations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "provider",
+              "value": "eq.withings"
+            },
+            {
+              "name": "select",
+              "value": "*"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "e810e2cb-6191-45e0-ae1e-fab738043777",
+      "name": "Token check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        500
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Token check\n// Input: Read integration W (one row). Output: one item with tokens, whether a refresh is needed, and the getmeas window.\n// Runs from the Withings push (window from the notification) or from the 09:45 safety poll (window = last 3 days).\nconst row = $input.first().json || {};\nlet body = {};\ntry { body = ($('Withings notify').first().json || {}).body || {}; } catch (e) { body = {}; }\nconst now = Math.floor(Date.now() / 1000);\nconst startdate = Number(body.startdate) || (now - 3 * 86400);\nconst enddate = Number(body.enddate) || now;\nif (!row.access_token) return [{ json: { fatal: 'Withings is not connected yet (no tokens in integrations). Open the authorise link first.' } }];\nconst exp = row.expires_at ? Math.floor(new Date(row.expires_at).getTime() / 1000) : 0;\nconst needRefresh = exp - now < 120;\nreturn [{ json: {\n  needRefresh,\n  access_token: row.access_token,\n  refresh_token: row.refresh_token,\n  client_id: row.client_id,\n  client_secret: row.client_secret,\n  meta: row.meta || {},\n  startdate, enddate,\n  withings_userid: String(body.userid || row.external_user_id || ''),\n} }];\n"
+      }
+    },
+    {
+      "id": "ef040a22-d32c-4d5f-9c0c-bc14012313bc",
+      "name": "Needs refresh",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        500
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needRefresh }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": true
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "8fa44ddf-549a-4ee7-8c1f-7dd6b40f17e9",
+      "name": "Refresh token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wbsapi.withings.net/v2/oauth2",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "requesttoken"
+            },
+            {
+              "name": "client_id",
+              "value": "={{ $json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $json.client_secret }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $json.refresh_token }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "36e21cfd-ea61-4067-90ca-dd923bd49b77",
+      "name": "Save refreshed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Save refreshed\n// Input: Withings requesttoken response (refresh_token grant). Output: row for the upsert, carrying access_token forward.\nconst res = $input.first().json || {};\nconst prev = $('Token check').first().json || {};\nif (res.status !== 0 || !res.body || !res.body.access_token) {\n  return [{ json: { fatal: `Withings token refresh failed: status ${res.status} ${res.error || ''}. Re-authorise via the callback link.`, access_token: prev.access_token } }];\n}\nconst b = res.body;\nreturn [{ json: {\n  provider: 'withings',\n  access_token: b.access_token,\n  refresh_token: b.refresh_token,\n  expires_at: new Date(Date.now() + (Number(b.expires_in || 10800) - 120) * 1000).toISOString(),\n  external_user_id: String(b.userid || ''),\n  updated_at: new Date().toISOString(),\n  startdate: prev.startdate, enddate: prev.enddate,\n} }];\n"
+      }
+    },
+    {
+      "id": "3101e1fc-131b-42d5-9f1c-0162fe54d2f1",
+      "name": "Fetch measures",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        500
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://wbsapi.withings.net/measure",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.access_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "getmeas"
+            },
+            {
+              "name": "meastypes",
+              "value": "1"
+            },
+            {
+              "name": "category",
+              "value": "1"
+            },
+            {
+              "name": "startdate",
+              "value": "={{ $('Token check').first().json.startdate }}"
+            },
+            {
+              "name": "enddate",
+              "value": "={{ $('Token check').first().json.enddate }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "e0df81e4-61cd-4baf-9568-eb5f18f19880",
+      "name": "Upsert integration W",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/integrations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "on_conflict",
+              "value": "provider"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.fatal ? '[]' : JSON.stringify([{ provider: 'withings', access_token: $json.access_token, refresh_token: $json.refresh_token, expires_at: $json.expires_at, external_user_id: $json.external_user_id, updated_at: $json.updated_at }]) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "468b2d09-fc67-4b69-928c-20fdaaa5677b",
+      "name": "Read weigh_ins",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        500
+      ],
+      "parameters": {
+        "url": "{{SUPABASE_URL}}/rest/v1/weigh_ins",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "grpid,measured_at,date,weight_kg,ignored"
+            },
+            {
+              "name": "order",
+              "value": "measured_at.desc"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "b3c8a249-91a8-4659-86e9-ec0782dd7a89",
+      "name": "Read daily",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        500
+      ],
+      "parameters": {
+        "url": "{{SUPABASE_URL}}/rest/v1/daily",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "date,weight_kg"
+            },
+            {
+              "name": "order",
+              "value": "date.desc"
+            },
+            {
+              "name": "limit",
+              "value": "60"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "aa9761cb-fc58-4f81-9c3b-007e61f08485",
+      "name": "Process weigh-ins",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        500
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Process weigh-ins\n// Inputs: Fetch measures (Withings getmeas), Read weigh_ins (recent raw readings), Read daily (recent daily rows).\n// Output: one item per NEW reading date with weighInRows, dailyRow and the Telegram reply; nothing if no new readings.\n// weigh_ins.ignored = true marks test or wrong readings: they still count as known (never re-logged) but never set a day's weight.\nconst res = $('Fetch measures').first().json || {};\nlet known = [], daily = [];\ntry { known = $('Read weigh_ins').all().map(i => i.json).filter(r => r.grpid != null); } catch (e) {}\ntry { daily = $('Read daily').all().map(i => i.json).filter(r => r.date && r.weight_kg != null); } catch (e) {}\nconst tc = $('Token check').first().json || {};\nconst fatalItem = msg => [{ json: { fatal: msg, reply: `⚠️ Withings weigh-in not logged: ${msg}`, weighInRows: [], dailyRow: null } }];\nif (tc.fatal) return fatalItem(tc.fatal);\nif (res.status !== 0) return fatalItem(`getmeas failed, status ${res.status} ${res.error || ''}`);\nconst grps = (res.body && res.body.measuregrps) || [];\nconst knownIds = new Set(known.map(r => String(r.grpid)));\nconst readings = [];\nfor (const g of grps) {\n  if (g.category !== 1) continue;                       // 1 = real measure, 2 = user objective\n  if (g.attrib === 2 || g.attrib === 4) continue;         // manual entries (profile weight typed into the app), not the scale\n  const m = (g.measures || []).find(x => x.type === 1);  // type 1 = weight\n  if (!m) continue;\n  const kg = Math.round(m.value * Math.pow(10, m.unit) * 100) / 100;\n  if (kg < 40 || kg > 150) continue;                    // not the user (guest / pet / box)\n  const dt = DateTime.fromSeconds(g.date).setZone('Europe/London');\n  readings.push({ grpid: g.grpid, measured_at: dt.toUTC().toISO(), date: dt.toISODate(), weight_kg: kg, source: 'withings', isNew: !knownIds.has(String(g.grpid)) });\n}\nconst fresh = readings.filter(r => r.isNew);\nif (!fresh.length) return [];\n\nconst TARGET = Number('{{PHASE_TARGET_KG}}');   // phase target: in the real system this is a programme key\nconst num = v => parseFloat(v) || 0;\nconst avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;\nconst out = [];\nconst dates = [...new Set(fresh.map(r => r.date))].sort();\nfor (const date of dates) {\n  // the day's weight = earliest reading that day (the fasted one), across stored (not ignored) and new readings\n  const dayReads = known.filter(r => r.date === date && !r.ignored).map(r => ({ measured_at: r.measured_at, weight_kg: num(r.weight_kg) }))\n    .concat(readings.filter(r => r.date === date).map(r => ({ measured_at: r.measured_at, weight_kg: r.weight_kg })));\n  dayReads.sort((a, b) => a.measured_at < b.measured_at ? -1 : 1);\n  const weight = dayReads[0].weight_kg;\n  const d = DateTime.fromISO(date);\n  const inRange = (from, to) => daily.filter(r => r.date >= from && r.date <= to && r.date !== date).map(r => num(r.weight_kg));\n  const thisWeek = inRange(d.minus({ days: 6 }).toISODate(), date).concat([weight]);\n  const lastWeek = inRange(d.minus({ days: 13 }).toISODate(), d.minus({ days: 7 }).toISODate());\n  const a1 = avg(thisWeek), a0 = avg(lastWeek);\n  let trend;\n  if (a0 != null) trend = `7-day avg ${a1.toFixed(1)}kg, ${(a1 - a0) >= 0 ? '+' : ''}${(a1 - a0).toFixed(1)}kg vs last week.`;\n  else trend = `7-day avg ${a1.toFixed(1)}kg (${thisWeek.length} reading${thisWeek.length > 1 ? 's' : ''}).`;\n  const extra = dayReads.length > 1 ? ` (${dayReads.length} readings today, first one kept)` : '';\n  const reply = `⚖️ ${weight}kg from the scale, logged for ${d.toFormat('d MMM')}${extra}.\\n${trend}\\n${(a1 - TARGET).toFixed(1)}kg above the ${TARGET}kg target.`;\n  out.push({ json: {\n    date, weight_kg: weight, reply,\n    weighInRows: fresh.filter(r => r.date === date).map(({ isNew, ...r }) => r),\n    dailyRow: { date, weight_kg: weight, weight_7d_avg: Math.round(a1 * 100) / 100, weight_source: 'withings' },\n  } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "f0ad5b2b-896b-4bbe-b171-02cb43c6c87d",
+      "name": "Upsert weigh_ins",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/weigh_ins",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "on_conflict",
+              "value": "grpid"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.weighInRows || []) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "a7721e31-9d39-4ac4-8710-111d06b6e619",
+      "name": "Upsert daily",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/daily",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "on_conflict",
+              "value": "date"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.dailyRow ? [$json.dailyRow] : []) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "2aa40c21-18f8-48cb-9138-757df25819a5",
+      "name": "Reply weight W",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2400,
+        560
+      ],
+      "parameters": {
+        "chatId": "{{TELEGRAM_CHAT_ID}}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "{{WEBHOOK_ID}}",
+      "credentials": {
+        "telegramApi": {
+          "id": "{{CRED_TELEGRAM_ID}}",
+          "name": "Telegram bot (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "bf17a10b-289d-4a66-af08-53e889fa708d",
+      "name": "Coach context W",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SUPABASE_URL}}/rest/v1/rpc/coach_context",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"kind\":\"weight\"}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "{{CRED_SUPABASE_ID}}",
+          "name": "Supabase (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "d667fb0b-5227-4905-abd5-df209c02d8f6",
+      "name": "Build coach request W",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        560
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Build coach request W\n// Input: Coach context W (coach_context('weight')). Output: { body } for the Anthropic Messages API (light tier, same as the bot's weigh-in coach line).\nconst ctx = $input.first().json || {};\nconst ev = $('Process weigh-ins').item.json || {};\nif (!ctx.charter || ev.fatal) return [];\nconst { charter, ...facts } = ctx;\nconst now = DateTime.now().setZone('Europe/London');\nconst rules = `## How you are being used right now\nYou are the coach line in the user's Telegram fitness bot. His Withings scale just sent today's fasted weigh-in automatically and the bot has already sent this confirmation:\n\"${ev.reply}\"\nAdd the coach's reaction, or reply exactly NONE if there is nothing worth adding.\n\nRules:\n- Never repeat the confirmation's numbers. Judge the trend (weight_trend) against the phase target in programme; one reading is noise, the 7-day average is the signal. Creatine water context while it applies (while a supplement change applies).\n- Only numbers from the facts. Never invent or estimate.\n- Layout per the charter's Tone and format section: one point per line, short lines, emoji marker at the start, plain text, no markdown. 1-4 short lines.\n- British English, hyphens never em dashes.\n- No adjustment proposals unless the trend has been off for a week, per the charter; the morning digest is where adjustments live.`;\nconst user = `Weigh-in landed ${now.toFormat('cccc d MMMM yyyy, HH:mm')} Europe/London.\\n\\nFacts:\\n${JSON.stringify(facts)}`;\nconst body = {\n  model: 'claude-sonnet-5-5',\n  max_tokens: 2000,\n  thinking: { type: 'adaptive' },\n  output_config: { effort: 'low' },\n  system: [\n    { type: 'text', text: charter, cache_control: { type: 'ephemeral' } },\n    { type: 'text', text: rules },\n  ],\n  messages: [{ role: 'user', content: user }],\n};\nreturn [{ json: { body } }];\n"
+      }
+    },
+    {
+      "id": "a9e594bf-39a8-49b8-a53b-3874ad54a4dd",
+      "name": "Claude coach W",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "{{CRED_ANTHROPIC_ID}}",
+          "name": "Anthropic (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "c32463fd-dd84-4dfb-90f0-6f81aaff6177",
+      "name": "Coach text W",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        560
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node: Coach text W\nconst j = $input.first().json || {};\nif (j.skip || j.error) return [];\nconst text = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\\n').trim();\nif (!text || /^NONE\\.?$/i.test(text)) return [];\nreturn [{ json: { text } }];\n"
+      }
+    },
+    {
+      "id": "0555c9f9-037b-49bd-9ff2-73d38ad89b58",
+      "name": "Reply coach W",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3600,
+        560
+      ],
+      "parameters": {
+        "chatId": "{{TELEGRAM_CHAT_ID}}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "{{WEBHOOK_ID}}",
+      "credentials": {
+        "telegramApi": {
+          "id": "{{CRED_TELEGRAM_ID}}",
+          "name": "Telegram bot (coach-engine)"
+        }
+      }
+    },
+    {
+      "id": "9d75e021-5ec4-4144-a893-7aef9763eb82",
+      "name": "Safety poll 09:45",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        700
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "daysInterval": 1,
+              "field": "days",
+              "triggerAtHour": 9,
+              "triggerAtMinute": 45
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Withings OAuth callback": {
+      "main": [
+        [
+          {
+            "node": "Read integration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read integration": {
+      "main": [
+        [
+          {
+            "node": "Exchange code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exchange code": {
+      "main": [
+        [
+          {
+            "node": "Save tokens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save tokens": {
+      "main": [
+        [
+          {
+            "node": "Upsert integration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert integration": {
+      "main": [
+        [
+          {
+            "node": "Subscribe notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subscribe notify": {
+      "main": [
+        [
+          {
+            "node": "Connected text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Connected text": {
+      "main": [
+        [
+          {
+            "node": "Respond connected",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Telegram connected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Withings notify (HEAD check)": {
+      "main": [
+        [
+          {
+            "node": "HEAD ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Withings notify": {
+      "main": [
+        [
+          {
+            "node": "Read integration W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read integration W": {
+      "main": [
+        [
+          {
+            "node": "Token check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token check": {
+      "main": [
+        [
+          {
+            "node": "Needs refresh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs refresh": {
+      "main": [
+        [
+          {
+            "node": "Refresh token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch measures",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh token": {
+      "main": [
+        [
+          {
+            "node": "Save refreshed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save refreshed": {
+      "main": [
+        [
+          {
+            "node": "Fetch measures",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upsert integration W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch measures": {
+      "main": [
+        [
+          {
+            "node": "Read weigh_ins",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read weigh_ins": {
+      "main": [
+        [
+          {
+            "node": "Read daily",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read daily": {
+      "main": [
+        [
+          {
+            "node": "Process weigh-ins",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process weigh-ins": {
+      "main": [
+        [
+          {
+            "node": "Upsert weigh_ins",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upsert daily",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reply weight W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply weight W": {
+      "main": [
+        [
+          {
+            "node": "Coach context W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Coach context W": {
+      "main": [
+        [
+          {
+            "node": "Build coach request W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build coach request W": {
+      "main": [
+        [
+          {
+            "node": "Claude coach W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude coach W": {
+      "main": [
+        [
+          {
+            "node": "Coach text W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Coach text W": {
+      "main": [
+        [
+          {
+            "node": "Reply coach W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safety poll 09:45": {
+      "main": [
+        [
+          {
+            "node": "Read integration W",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/London"
+  },
+  "nodeGroups": [
+    {
+      "id": "b442bf5b-d495-475c-b420-bfe1d18da012",
+      "name": "Connect (one-off OAuth)",
+      "nodeNames": [
+        "Read integration",
+        "Exchange code",
+        "Save tokens",
+        "Upsert integration",
+        "Subscribe notify",
+        "Connected text",
+        "Respond connected",
+        "Telegram connected"
+      ],
+      "description": "Withings redirects here after Authorise: swap the code for tokens, store them in Supabase integrations, subscribe the notify webhook."
+    },
+    {
+      "id": "a98c854d-06a2-436e-b4cd-1f2dc61c739e",
+      "name": "Weigh-in",
+      "nodeNames": [
+        "Read integration W",
+        "Token check",
+        "Needs refresh",
+        "Refresh token",
+        "Save refreshed",
+        "Upsert integration W",
+        "Fetch measures",
+        "Read weigh_ins",
+        "Read daily",
+        "Process weigh-ins",
+        "Upsert weigh_ins",
+        "Upsert daily",
+        "Reply weight W",
+        "Coach context W",
+        "Build coach request W",
+        "Claude coach W",
+        "Coach text W",
+        "Reply coach W"
+      ],
+      "description": "Withings pushes a notification per weigh-in: refresh token if due, getmeas, store raw readings, set daily.weight_kg (first reading of the day), T"
+    }
+  ]
+}
